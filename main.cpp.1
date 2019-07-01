@@ -1,0 +1,1048 @@
+#include <GL/glut.h>
+#include <GL/glu.h>
+#include <GL/gl.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <time.h>
+
+#include <pthread.h>
+
+#include <vector>
+
+#include "bmp.h"
+#include "jpg.h"
+#include "font.h"
+#include "audio.h"
+#include "xml.h"
+#include "main.h"
+
+#define WIDTH_SIZE  10
+#define HEIGHT_SIZE 20
+
+#define WINDOW_WIDTH  1000
+#define WINDOW_HEIGHT 1000
+
+
+using namespace std;
+
+void idle();
+void init();
+
+float phi = M_PI*0.60, theta = -M_PI*0.75;
+//int cor_u_off = 0;
+//int cor_v_off = WINDOW_HEIGHT/2;
+int cor_u_off = WINDOW_WIDTH/2;
+int cor_v_off = WINDOW_HEIGHT/6;
+int cube_size;
+
+
+int score = 0;
+int sys_time = 0;
+int level = 1;
+int num_match_total=0;
+
+time_t t;
+
+
+struct Point{
+	float x , y, z; // actual coordinate
+	int u,v ; // correspond position in display
+
+	int out_range_flag ;
+
+	Point(float src_x, float src_y, float src_z){
+		x = src_x;
+		y = src_y;
+		z = src_z;
+
+		out_range_flag = 0;
+	}
+	Point(){
+		x = 0;
+		y = 0;
+		z = 0;
+		out_range_flag = 0;
+	}
+
+	void trans(float x_diff, float y_diff,float z_diff);
+	void rot_xy( float phi);
+	void rot_xz( float theta);
+
+	void perspective();
+};
+
+Point look_from;
+Point look_at;
+
+void Point::trans(float x_diff, float y_diff,float z_diff){
+	x += x_diff;
+	y += y_diff;
+	z += z_diff;
+}
+
+void Point::rot_xy( float phi){
+	float tmp0 = x * cos(phi) - y * sin(phi);
+	float tmp1 = x * sin(phi) + y * cos(phi);
+	x = tmp0;
+	y = tmp1;
+}
+
+void Point::rot_xz( float theta){
+	float tmp0 = x * cos(theta) - z * sin(theta);
+	float tmp1 = z * sin(theta) + z * cos(theta);
+	x = tmp0;
+	z = tmp1;
+}
+
+void Point::perspective(){
+		// we add the perspective
+		// we measure the distance.
+		float p,q,r;
+		p = (look_at.x -look_from.x)/
+			sqrt( pow(look_at.x-look_from.x,2)+ pow(look_at.y-look_from.y,2)) ;
+		q = (look_at.y -look_from.y)/
+			sqrt( pow(look_at.x-look_from.x,2)+ pow(look_at.y-look_from.y,2)) ;
+		r = 0;
+	
+		float tmp;
+		tmp = p;
+		p = q;
+		q =  -tmp;
+
+		float s;
+		float a, b,c;
+		s =(p * (look_from.x-look_at.x) + 
+			q * (look_from.y-look_at.y) +
+			r * (look_from.z-look_at.z))/ 
+				( pow(look_from.x-look_at.x,2) + 
+					pow(look_from.y-look_at.y,2) +
+					pow(look_from.z-look_at.z,2));
+		a = p - s * (look_from.x-look_at.x);
+		b = q - s * (look_from.y-look_at.y);
+		c = r - s * (look_from.z-look_at.z);
+	
+		float t;
+		float d,e,f;
+		t =((x-look_at.x) * (look_from.x-look_at.x) + 
+			(y-look_at.y) * (look_from.y-look_at.y) +
+			(z-look_at.z) * (look_from.z-look_at.z))/ 
+				( pow(look_from.x-look_at.x,2) + 
+					pow(look_from.y-look_at.y,2) +
+					pow(look_from.z-look_at.z,2));
+		d = (x-look_at.x) - t * (look_from.x-look_at.x);
+		e = (y-look_at.y) - t * (look_from.y-look_at.y);
+		f = (z-look_at.z) - t * (look_from.z-look_at.z);
+		float dist;
+		dist = sqrt(( pow(d,2) + pow(e,2) + pow(f,2)));
+	
+		float cos_arg ; // cos
+		cos_arg = (a * d + b *e + c *f)/
+			(sqrt(pow(a,2)+pow(b,2)+pow(c,2))*sqrt(pow(d,2)+pow(e,2)+pow(f,2)));
+
+
+	// calculation of sine is a bit complicated
+	// we need to make sure if it is positive or not.
+	// calculation of X origin(perpendicular to Y and perspective vector(at-from))
+		float g,h,j;
+		float tmp_arg;
+		g = c*(look_from.y-look_at.y)- b*(look_from.z-look_at.z);
+		h = a*(look_from.z-look_at.z)- c*(look_from.x-look_at.x);
+		j = b*(look_from.x-look_at.x)- a*(look_from.y-look_at.y);
+
+		tmp_arg = (g * d + h *e + j *f)/
+			(sqrt(pow(g,2)+pow(h,2)+pow(j,2))*sqrt(pow(d,2)+pow(e,2)+pow(f,2)));
+
+		float sin_arg;
+		if( tmp_arg > 0)
+			sin_arg = sqrt(1- pow(cos_arg,2));	
+		else
+			sin_arg = - sqrt(1- pow(cos_arg,2));	
+
+
+		if( ((look_from.x - d)/(look_from.x-look_at.x) < 0)||
+			((look_from.y - e)/(look_from.y-look_at.y) < 0)||
+			((look_from.z - f)/(look_from.z-look_at.z) < 0)){
+			// this is outrange
+			out_range_flag = 1;
+		}
+
+		float l;
+		l = sqrt(pow(look_from.x-x,2)+ pow(look_from.y-y,2)+ pow(look_from.z-z,2));
+		dist = 40 * (dist / sqrt(pow(l,2)-pow(dist,2)));
+
+		u = (int)(dist * cos_arg * cube_size) + cor_u_off;// + cor_x * cube_size;
+		v = (int)(dist * sin_arg * cube_size) + cor_v_off;// + cor_x * cube_size;
+}
+
+class Grid{
+public:
+
+	int x , y ,z;
+	int cor_x, cor_y, cor_z;
+
+	Point pt[406];
+
+	Grid(int src_x , int src_y){
+		cor_x = src_x;
+		cor_y = src_y;
+		cor_z = 0;
+
+		update();
+	}
+	Grid(){
+		cor_x = 0;
+		cor_y = 0;
+		cor_z = 0;
+		update();
+	}
+	void draw_line(int i, int j);
+	void draw_lines();
+	void update();
+};
+
+class Cube{
+private:
+	void draw_line(int i , int j);
+	void draw_surface(int i, int j, int k, int l);
+	void update();
+public:
+	Point pt[8];
+
+	float v_x, v_y;
+
+	int color_id;
+	float cor_x, cor_y, cor_z;
+
+	void draw_lines();
+	void draw_surfaces();
+
+	Cube(){
+		cube_size =40;
+		update();
+		v_x = 0;
+		v_y = 0;
+	}
+
+	Cube(int src_x, int src_y, int src_z){
+		cube_size =40;
+		cor_x = src_x;
+		cor_y = src_y;
+		cor_z = src_z;
+		v_x = 0;
+		v_y = 0;
+
+		update();
+	}
+};
+
+void Grid::update(){
+	// xy base grid
+	for(int i =0;i<200;i++)
+		pt[i]   = Point( (float((i/2)-50)), 48*pow(-1,(i%2)), 0);
+
+	for(int i =0;i<200;i++)
+		pt[i+200] = Point( 48*pow(-1,i%2),  (float((i/2)-50)), 0);
+
+
+	// coordinate information
+/*		pt[200] = Point( 0.0-2.0,0.0-2.0,0.0);
+		pt[201] = Point( 1.0-2.0,0.0-2.0,0.0);
+
+		pt[202] = Point( 0.0-2.0,0.0-2.0,0.0);
+		pt[203] = Point( 0.0-2.0,1.0-2.0,0.0);
+
+		pt[204] = Point( 0.0-2.0,0.0-2.0,0.0);
+		pt[205] = Point( 0.0-2.0,0.0-2.0,1.0);
+		*/
+
+	//view port to two dimension space;
+	for(int i =0;i<400;i++){
+		float tmp0, tmp1;
+		pt[i].trans(cor_x, cor_y, cor_z);
+/*
+		pt[i].rot_xy(phi);
+		pt[i].rot_xz(theta);
+		*/
+
+		pt[i].perspective();
+
+	}
+}
+
+void Grid::draw_lines(){
+
+	update();
+	glColor3d(0.0,1.0,0.0);
+	glBegin(GL_LINES);
+	for(int i =0;i<400;i+=2){
+		glVertex2i(pt[i].u, pt[i].v);
+		glVertex2i(pt[i+1].u, pt[i+1].v);
+	}
+	/*
+	glColor3d(1.0,1.0,1.0);
+	for(int i =200;i<206;i+=2){
+		glVertex2i(pt[i].u, pt[i].v);
+		glVertex2i(pt[i+1].u, pt[i+1].v);
+	}*/
+
+	glColor3d(1.0,0.0,0.0);
+		glVertex2i(pt[100].u, pt[100].v);
+		glVertex2i(pt[101].u, pt[101].v);
+		glVertex2i(pt[300].u, pt[300].v);
+		glVertex2i(pt[301].u, pt[301].v);
+	glColor3d(0.0,1.0,0.0);
+
+	/*
+	int len;
+	char str[6];
+	len = sprintf(str, "x");
+	put_str(str, len, 1, pt[201].u, pt[201].v);
+
+	len = sprintf(str, "y");
+	put_str(str, len, 1, pt[203].u, pt[203].v);
+
+	len = sprintf(str, "z");
+	put_str(str, len, 1, pt[205].u, pt[205].v);
+
+	*/
+	glEnd();
+}
+
+void Cube::update(){
+	// define data points
+	for(int i =0;i<8;i++)
+		pt[i] = Point( 1.0*(float)((i&0x04)>>2), 1.0*(float)((i&0x02)>>1), 1.0*(float)((i&0x01)>>0));
+	//view port to two dimension space;
+	for(int i =0;i<8;i++){
+
+		pt[i].trans(cor_x, cor_y, cor_z);
+		pt[i].trans(-0.5,-0.5,-0.5);
+
+		//pt[i].rot_xy(phi);
+		//pt[i].rot_xz(theta);
+		pt[i].perspective();
+
+	}
+}
+
+void Cube::draw_surface(int i, int j,int k, int l){
+	//glColor3d(0.6,0.6,0.6);
+
+	glColor3d( (color_id+1)/4, ((color_id+1)/2)%2, (color_id+1)%2);
+
+	if(pt[i].out_range_flag == 1)
+		return;
+	if(pt[j].out_range_flag == 1)
+		return;
+	if(pt[k].out_range_flag == 1)
+		return;
+	if(pt[l].out_range_flag == 1)
+		return;
+	glBegin(GL_POLYGON);
+	glVertex2i(pt[i].u, pt[i].v);
+	glVertex2i(pt[j].u, pt[j].v);
+	glVertex2i(pt[k].u, pt[k].v);
+	glVertex2i(pt[l].u, pt[l].v);
+	glEnd();
+}
+
+
+void Cube::draw_line(int i, int j){
+	if(pt[i].out_range_flag == 1)
+		return;
+	if(pt[j].out_range_flag == 1)
+		return;
+	glColor3d(0.0,0.0,0.0);
+	glBegin(GL_LINES);
+	glVertex2i(pt[i].u, pt[i].v);
+	glVertex2i(pt[j].u, pt[j].v);
+	glEnd();
+}
+	
+void Cube::draw_lines(){
+	update();
+	for(int i =0;i<4;i++)
+		draw_line(i,i+4);
+
+	draw_line(0,1);	
+	draw_line(2,3);	
+	draw_line(4,5);	
+	draw_line(6,7);	
+	draw_line(0,2);	
+	draw_line(1,3);	
+	draw_line(4,6);	
+	draw_line(5,7);	
+}
+
+void Cube::draw_surfaces(){
+	
+	char str[16];
+	int len;
+	float d;
+	for(int i =0;i <8;i++){
+		d = sqrt( pow(look_from.x - pt[i].x,2) + 
+			pow(look_from.y - pt[i].y,2) + pow(look_from.z - pt[i].z,2));
+		len = sprintf(str, "%f", d);
+		put_str(str, len, 1, pt[i].u, pt[i].v);
+	}
+
+	draw_surface(0,1,3,2);
+	draw_surface(4,5,7,6);
+	draw_surface(0,1,5,4);
+	draw_surface(2,3,7,6);
+	draw_surface(1,3,7,5);
+	draw_surface(0,2,6,4);
+	
+}
+
+int num_cube = 0;
+Cube cube;
+
+
+
+#define CELL_SIZE_X 40 
+#define CELL_SIZE_Y CELL_SIZE_X
+
+int maze_list[CELL_SIZE_X][CELL_SIZE_Y];
+int maze_search_list[CELL_SIZE_X][CELL_SIZE_Y];
+
+void maze_list_init(){
+	for(int i =0;i<CELL_SIZE_X;i++){
+	for(int j =0;j<CELL_SIZE_Y;j++){
+		maze_list[i][j] = 0;
+		maze_search_list[i][j] = 0;
+	}}
+}
+
+class Maze{
+public:
+	int x, y;
+
+	int id;
+
+	int property; // 0 normal, 1 start , 2 end
+	int dir[4];
+
+	Maze *parent;
+
+	vector<Maze> children;
+
+	Maze(int src_x, int src_y, Maze *src_parent, int parent_dir){
+		x = src_x;
+		y = src_y;
+		parent = src_parent;
+
+		for(int i=0;i<4;i++)
+			dir[i] = 0;
+		dir[(parent_dir+2)%4] = 1;
+
+		maze_list[x][y] = 1;
+		id = parent->id + 1;
+		property = 0;
+
+		if(id < 40*40)
+			gen();
+	}
+	Maze(){
+		x=0;
+		y= 0;
+		id =0;
+		maze_list[x][y] = 1;
+		for(int i=0;i<4;i++)
+			dir[i] =0;
+		property = 1;
+		gen();
+	}
+
+	void gen();
+
+	void draw();
+	void draw_lines();
+	void draw_floors();
+
+	void draw_floor();
+	void draw_line(Point pt0, Point pt1);
+
+	Maze* ith(int i);
+};
+
+
+void Maze::gen(){
+	int r;
+	int next_x;
+	int next_y;
+	int count = 0;
+	while(1){
+	r = rand() % 4;
+	switch(r) {
+		case 0:
+			next_x = x+1; next_y = y+0; break;
+		case 1:
+			next_x = x+0; next_y = y+1; break;
+		case 2:
+			next_x = x-1; next_y = y+0; break;
+		case 3:
+			next_x = x+0; next_y = y-1; break;
+	}
+
+		if(count > 4)
+			return ;
+		else
+			count++;
+
+		if(maze_list[next_x][next_y] == 1)
+			continue;
+		if((next_x < 0) || (next_y < 0))
+			continue;
+		else
+			break;
+	}
+	dir[r] = 1;
+	children.push_back( Maze( next_x, next_y, this, r));
+}
+
+
+void Maze::draw_floors(){
+	draw_floor();
+	for(int i =0;i<children.size();i++)
+		children[i].draw_floor();
+}
+
+void Maze::draw_lines(){
+
+	//if (id ==0)
+		//printf("0: %d 1: %d 2:%d 3:%d\n", dir[0], dir[1], dir[2], dir[3] );
+
+
+
+	// draw the side
+	if(dir[0] == 0){ // right
+		draw_line( Point( (x+1), (y+0), 0),
+				   Point( (x+1), (y+1), 0));
+	}
+	if(dir[1] == 0){ // up
+		draw_line( Point( (x+0), (y+1), 0),
+				   Point( (x+1), (y+1), 0));
+	}
+	if(dir[2] == 0){ //left
+		draw_line( Point( (x+0), (y+0), 0),
+				   Point( (x+0), (y+1), 0));
+	}
+	if(dir[3] == 0){ //down
+		draw_line( Point( (x+0), (y+0), 0),
+				   Point( (x+1), (y+0), 0));
+	}
+
+
+	for(int i =0;i<children.size();i++)
+		children[i].draw_lines();
+}
+void Maze::draw_floor(){
+	Point pt[4];
+	pt[0].x = (x+0);
+	pt[0].y = (y+0);
+	pt[1].x = (x+1);
+	pt[1].y = (y+0);
+	pt[2].x = (x+1);
+	pt[2].y = (y+1);
+	pt[3].x = (x+0);
+	pt[3].y = (y+1);
+
+	for(int i=0;i<4;i++){
+		pt[i].z = 0;
+		pt[i].rot_xy(phi);
+		pt[i].rot_xz(theta);
+		pt[i].trans(cor_u_off, cor_v_off,0);
+		pt[i].perspective();
+	}
+
+	switch(property){
+		case 0:
+			glColor3d(1.0,1.0,0.0); break;
+		case 1:
+			glColor3d(1.0,0.0,0.0); break;
+		case 2:
+			glColor3d(0.0,0.0,1.0); break;
+	}
+
+	glBegin(GL_POLYGON);
+	for(int i=0;i<4;i++)
+		glVertex2i(pt[i].u, pt[i].v);
+	glEnd();
+}
+
+void Maze::draw_line(Point pt0, Point pt1){
+
+	Point pt[4];
+	pt[0] = pt0;
+	pt[1] = pt1;
+	pt[2] = pt0;
+	pt[3] = pt1;
+
+	pt[2].trans(0,0,0.3);
+	pt[3].trans(0,0,0.3);
+
+	pt[0].trans(0,0,0);
+	pt[1].trans(0,0,0);
+
+	if(pt[0].out_range_flag == 1)
+		return;
+	if(pt[1].out_range_flag == 1)
+		return;
+	if(pt[2].out_range_flag == 1)
+		return;
+	if(pt[3].out_range_flag == 1)
+		return;
+
+	for(int i =0;i<4;i++){
+		pt[i].perspective();
+
+	}
+	glColor3d(0.6,0.6,0.6);
+	glBegin(GL_POLYGON);
+	glVertex2i(pt[0].u, pt[0].v); // tantatively x and y are transposed....
+	glVertex2i(pt[1].u, pt[1].v);
+
+	glVertex2i(pt[1].u, pt[1].v);
+	glVertex2i(pt[3].u, pt[3].v);
+
+	glVertex2i(pt[3].u, pt[3].v);
+	glVertex2i(pt[2].u, pt[2].v);
+
+	glVertex2i(pt[2].u, pt[2].v);
+	glVertex2i(pt[0].u, pt[0].v);
+	glEnd();
+
+
+	glColor3d(0.0,0.0,0.0);
+	glBegin(GL_LINE_LOOP);
+	glVertex2i(pt[0].u, pt[0].v); // tantatively x and y are transposed....
+	glVertex2i(pt[1].u, pt[1].v);
+	glVertex2i(pt[3].u, pt[3].v);
+	glVertex2i(pt[2].u, pt[2].v);
+	glEnd();
+}
+
+
+//  pick any object whose height is i from the root, but if it is not unique, it is randomly taken.
+Maze* Maze::ith(int i){
+	Maze *ret = this;
+	for(int l=0;l<i;l++){
+		if(ret->children.size() != 0)
+			ret = &(ret->children[rand()%children.size()]);
+		else
+			return ret;
+	}
+	return ret;
+}
+
+
+
+Maze *maze;
+vector<Cube> cube_list;
+
+void display(void)
+{
+
+	glClear(GL_COLOR_BUFFER_BIT);
+
+
+
+	
+//	usleep(100000);
+
+	static Maze *current_pt;
+	static Maze * last_branch;
+/*
+	static int start_flag = 0;
+	if(start_flag == 0){
+		current_pt  = maze;
+		last_branch = maze;
+		start_flag  = 1;
+	}else{
+
+		switch( current_pt->children.size()){
+			case 0:{
+			current_pt = last_branch;
+			if(last_branch->children.size() ==0)
+				current_pt = maze;
+			else
+				current_pt->children.erase(current_pt->children.begin());
+			break;
+			}
+			case 1:
+				break;
+			default:
+				last_branch = current_pt;
+				break;
+		}
+		current_pt = &(current_pt->children[0]);
+	}
+*/
+	//cube.cor_x = current_pt->x;
+	//cube.cor_y = current_pt->y;
+
+float l = sqrt(
+pow(look_from.x - look_at.x,2) +
+pow(look_from.y - look_at.y,2) +
+pow(look_from.z - look_at.z,2) );
+	//cube.cor_x = look_from.x;// + 0.3* (look_at.x - look_from.x) / l;
+	//cube.cor_y = look_from.y;// + 0.3* (look_at.y - look_from.y) / l;
+	//cube.cor_z = 1.0;
+
+
+	Grid grid;
+	//grid.draw_lines();
+
+	maze->draw_floors();
+	maze->draw_lines();
+
+	//cube.draw_surfaces();
+	//cube.draw_lines();
+
+
+
+	for(int i =0;i<cube_list.size();i++){
+		cube_list[i].draw_surfaces();
+		cube_list[i].draw_lines();
+	}
+
+
+	char str[64];
+	int len;
+
+	len = sprintf(str, "Copyright(C) 2019 Koji Sunami");
+	put_str(str, len, 1, 230, 40);
+
+	glColor3d(1.0,1.0,1.0);
+	glBegin(GL_LINES);
+	glVertex2i(700,0);
+	glVertex2i(700,1000);
+	glEnd();
+
+	len = sprintf(str, "Score: %d\nTime: %d", score, sys_time);
+	put_str(str, len, 2, 740, 800);
+
+	len = sprintf(str, "x: %f\ny: %f\nz:%f", look_from.x, look_from.y, look_from.z);
+	put_str(str, len, 2, 740, 600);
+
+	len = sprintf(str, "x: %f\ny: %f\nz:%f", look_at.x, look_at.y, look_at.z);
+	put_str(str, len, 2, 740, 300);
+
+	glutSwapBuffers();
+	glFlush();
+}
+
+void keyboard( unsigned char key, int x, int y){
+
+float d = sqrt(pow(look_at.x - look_from.x, 2) + pow(look_at.y - look_from.y ,2));
+float h = look_from.z - look_at.z;
+
+float angle = atan(d/look_from.z);
+
+float px = (look_at.x - look_from.x )/
+	sqrt(pow(look_at.x - look_from.x, 2) + pow(look_at.y - look_from.y ,2));
+float py = (look_at.y - look_from.y )/
+	sqrt(pow(look_at.x - look_from.x, 2) + pow(look_at.y - look_from.y ,2));
+
+	switch(key){
+		case 'q':	
+			exit(0);
+		case 'r':{
+			look_from.z -= .1;
+			break;
+		}
+		case 't':{
+			look_from.z += .1;
+			break;
+		}
+		case ' ':{
+			look_from.y += py;
+			look_at.y += py;
+			look_from.x += px;
+			look_at.x += px;
+			break;
+		case 'k':{
+			break;
+		}
+		case 'i':{
+			break;
+		}
+		case 'j':{
+			phi += 0.1;
+			break;
+		}
+		case 'l':{
+			phi -= 0.1;
+			break;
+		}
+		}
+	}
+}
+
+void special_key(int key ,int x , int y){
+
+float px = (look_at.x - look_from.x )/
+	sqrt(pow(look_at.x - look_from.x, 2) + pow(look_at.y - look_from.y ,2));
+float py = (look_at.y - look_from.y )/
+	sqrt(pow(look_at.x - look_from.x, 2) + pow(look_at.y - look_from.y ,2));
+
+float len = sqrt(pow(look_at.x - look_from.x, 2) + pow(look_at.y - look_from.y ,2));
+
+float d = sqrt(pow(look_at.x - look_from.x, 2) + pow(look_at.y - look_from.y ,2));
+float h = look_from.z - look_at.z;
+
+float phi = atan(d/look_from.z);
+
+
+float angle = acos(px);
+if((px>=0) && (py>=0))
+	angle = angle;
+else if((px<0) && (py>=0))
+	angle = angle;
+else if((px<0) && (py<0))
+	angle = -angle;
+else if((px>=0) && (py<0))
+	angle = -angle;
+//printf("px is  %f\n" , px);
+printf("angleis  %f\n" , angle);
+
+printf("from x y %f %f at x y %f %f\n", look_from.x, look_from.y, look_at.x , look_at.y);
+
+
+	switch(key){
+		case GLUT_KEY_UP:
+			look_at.x = look_from.x + ((look_at.x- look_from.x)/d) * (h * tan(phi + M_PI/12));
+			look_at.y = look_from.y + ((look_at.y- look_from.y)/d) * (h * tan(phi + M_PI/12));
+			//cube.v_y = 8;
+			break;
+
+		case GLUT_KEY_DOWN:
+			look_at.x = look_from.x + ((look_at.x- look_from.x)/d) * (h * tan(phi - M_PI/12));
+			look_at.y = look_from.y + ((look_at.y- look_from.y)/d) * (h * tan(phi - M_PI/12));
+			//cube.v_y = -8;
+			break;
+
+		case GLUT_KEY_RIGHT:
+			//cube.v_x = 8;
+			look_at.x = look_from.x + len*cos(angle-M_PI/12);
+			look_at.y = look_from.y + len*sin(angle-M_PI/12);
+			break;
+
+		case GLUT_KEY_LEFT:
+			//cube.v_x = -8;
+			look_at.x = look_from.x + len*cos(angle+M_PI/12);
+			look_at.y = look_from.y + len*sin(angle+M_PI/12);
+			break;
+	}
+}
+
+void special_key_up(int key ,int x , int y){
+	switch(key){
+		case GLUT_KEY_UP:
+		case GLUT_KEY_DOWN:
+			//cube.v_y = 0;
+			break;
+		case GLUT_KEY_RIGHT:
+		case GLUT_KEY_LEFT:
+			//cube.v_x = 0;
+			break;
+	}
+}
+
+
+void idle()
+{
+	glutPostRedisplay();
+}
+
+void maze_init() {
+	maze_list_init();
+
+	// continue until first one has at least length 5
+	while(1){
+		maze = new Maze();
+		if(maze->ith(5)->id == 5)
+			break;
+	}
+
+	Maze *current_pt;
+	
+	static int flag = 0;
+	int max_id=0;
+
+	while(1){
+
+	if( flag == 0){
+		current_pt = maze;
+	}else{
+		if(current_pt->children.size() == 0){
+			//current_pt->property = 2;
+
+			printf("hello \n");
+			static int c=0;
+			//printf("current pt is away from origin by %d\n" ,current_pt->id);
+			max_id= max(current_pt->id, max_id);
+			int t =  rand()%max_id;
+hoge:
+
+			current_pt = maze->ith(t);
+			printf("gen is %d max id is %d\n", current_pt->id, max_id);
+
+		// add branch
+		if( (current_pt->x < CELL_SIZE_X) && maze_list[current_pt->x+1][current_pt->y] == 0){
+			current_pt->children.push_back( Maze(current_pt->x+1, current_pt->y,current_pt, 0));
+			maze_list[current_pt->x+1][current_pt->y] = 1;
+		}
+		else if( ( current_pt->y < CELL_SIZE_Y) && (maze_list[current_pt->x][current_pt->y+1] == 0)){
+			current_pt->children.push_back( Maze(current_pt->x, current_pt->y+1,current_pt, 1));
+			maze_list[current_pt->x][current_pt->y+1] = 1;
+		}	
+		else if( (current_pt->x > 0) &&( maze_list[current_pt->x-1][current_pt->y] == 0)){
+			current_pt->children.push_back( Maze(current_pt->x-1, current_pt->y,current_pt, 2));
+			maze_list[current_pt->x-1][current_pt->y] = 1;
+		}
+		else if( (current_pt->y > 0) && (maze_list[current_pt->x][current_pt->y-1] == 0)){
+			current_pt->children.push_back( Maze(current_pt->x, current_pt->y-1,current_pt, 3));
+			maze_list[current_pt->x][current_pt->y-1] = 1;
+		}
+		else{
+			//printf("hello %d\n",c);
+			if(c > 10)
+				break;
+			//return;
+			c++;
+			t ++;
+			goto hoge;
+		}
+
+		}
+			if(current_pt->children.size() != 0)
+				current_pt = &(current_pt->children[rand()%current_pt->children.size()]);
+			else
+				printf("this is end of the world\n");
+			//current_pt = &(current_pt->children[0]);
+
+
+			//maze_search_list[current_pt->x][current_pt->y] = 1;
+	}
+	flag++;
+	//printf("flag is %d\n", flag);
+	if(flag > 1000)
+		break;
+	}
+}
+
+void init(){
+	maze_init();
+	look_from.x = -5.0;
+	look_from.y = -5.0;
+	look_from.z = 2.0;
+
+	look_at.x = 0.0;
+	look_at.y = 0.0;
+	look_at.z = 0.0;
+
+
+	// create a donut, and classify in pixel
+	
+	int arr[100][100][100];
+
+/*
+	for(int i =0;i<100;i++){
+	for(int j =0;j<100;j++){
+	for(int k =0;k<100;k++){
+		arr[i][j][k] = i;;
+	}}}
+	*/
+
+	for(int i =0;i<30;i++){
+		cube_list.push_back(Cube(0.0, 10*cos(2*M_PI*i/30), 10*sin(2*M_PI*i/30)));
+	}
+
+	glClearColor(0.0,0.0,0.0,0.0);
+	glMatrixMode(GL_PROJECTION);
+	gluOrtho2D(0.0, WINDOW_WIDTH, 0.0, WINDOW_HEIGHT);
+}
+
+
+
+void* gl_loop_thread(void* threadid){
+	printf("hello\n");
+	glutMainLoop();
+	return NULL;
+}
+
+void* time_watch_thread(void *threadid){
+	struct timespec oldtime, newtime, middletime;
+while(1){ 
+
+#define time_gap( t1, t0) ( \
+	(float)(t1.tv_sec - t0.tv_sec) + (float)(t1.tv_nsec - t0.tv_nsec)/1000000000 ) 
+	clock_gettime(CLOCK_REALTIME, &newtime);
+	
+	static int first_time_flag = 0;
+	if ( first_time_flag == 0){
+		clock_gettime(CLOCK_REALTIME, &middletime);	
+		clock_gettime(CLOCK_REALTIME, &oldtime);	
+		first_time_flag ++;
+	}
+	//cube.v_x = 100;
+	//cube.cor_x += cube.v_x * time_gap(newtime, middletime);
+	//cube.cor_y += cube.v_y * time_gap(newtime, middletime);
+	middletime = newtime;
+
+	//cube.cor_z = 0.5*sin(time_gap(newtime, oldtime)*10);
+
+	}
+
+	return NULL;
+}
+
+void* music_thread(void *threadid){
+	while(1){
+		//music_play("resources/tetris.wav");
+		sleep(1);
+	}
+	return NULL;
+}
+
+int main(int argc, char *argv[]) {
+
+	srand( (unsigned int) time(&t));
+
+	glutInit(&argc, argv);
+	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
+
+	glutInitWindowPosition(400,0);
+	glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+
+
+	glutCreateWindow(argv[0]);
+	glutDisplayFunc(display);
+	glutKeyboardFunc(keyboard);
+	glutSpecialFunc(special_key);
+	glutSpecialUpFunc(special_key_up);
+	glutIdleFunc(idle);
+
+	init();
+
+	pthread_t threads[3];
+	int rc;
+
+	//rc = pthread_create(&threads[0], NULL, gl_loop_thread, (void*) 0);
+	rc= pthread_create(&threads[1], NULL, time_watch_thread, (void*) 1);
+	rc= pthread_create(&threads[2], NULL, music_thread, (void*) 2);
+	if(rc){
+		printf("failed to launch pthread\n");
+	}
+
+	glutMainLoop();
+
+	return 0;
+}
+
+
+
